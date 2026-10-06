@@ -17,13 +17,13 @@ Data flows through four layers: sensors → gateway → backend (MQTT + DB + rul
 
 ## MQTT topics:
 
-1) iottelemetry: sensor readings.
+1) **iottelemetry**: sensor readings.
 
-2) iotevents: RFID and alarm events.
+2) **iotevents**: RFID and alarm events.
 
-3) iotcmd: commands to actuators.
+3) **iotcmd**: commands to actuators.
 
-4) iotactuatorstatus: acknowledgements from the actuator side.
+4) **iotactuatorstatus**: acknowledgements from the actuator side.
 
 ## Components
 
@@ -55,19 +55,19 @@ RFID_DEBUG is ignored.
 
 ### Raspberry Pi services
 
-mqtttodb.py: subscribes to iottelemetry and iotevents. It inserts the data into the telemetry_v2 and events tables in MariaDB.
+**mqtttodb.py**: subscribes to iottelemetry and iotevents. It inserts the data into the telemetry_v2 and events tables in MariaDB.
 
-iot_rules.py: the automatic rule engine. It listens to telemetry and events and publishes commands to iotcmd.
+**iot_rules.py**: the automatic rule engine. It listens to telemetry and events and publishes commands to iotcmd.
 
-actuatord.py: validates each command against a whitelist. It sends CMD;<CMD> to the actuator Arduino on /dev/ttyACM0 at 57600 baud. It publishes the Arduino's reply (e.g. ACK;UNLOCK) to iotactuatorstatus.
+**actuatord.py**: validates each command against a whitelist. It sends CMD;<CMD> to the actuator Arduino on /dev/ttyACM0 at 57600 baud. It publishes the Arduino's reply (e.g. ACK;UNLOCK) to iotactuatorstatus.
 
-ws_scada.py: a WebSocket server at /ws. It pushes the latest telemetry and the last 10 events every second. It accepts commands from the UI, logs them in the commands table and publishes them to iotcmd.
+**ws_scada.py**: a WebSocket server at /ws. It pushes the latest telemetry and the last 10 events every second. It accepts commands from the UI, logs them in the commands table and publishes them to iotcmd.
 
-index.html is served by Apache or Nginx. It connects to ws://<RPi-IP>:8888/ws, shows status, telemetry and events, and has buttons such as UNLOCK and ALARM OFF.
+**index.html** is served by Apache or Nginx. It connects to ws://<RPi-IP>:8888/ws, shows status, telemetry and events, and has buttons such as UNLOCK and ALARM OFF.
 
 ### Rule engine (iot_rules.py)
 
-Parameters:
+**<ins>Parameters:</ins>**
 
 AUTORELOCK_SECONDS = 5: auto-lock delay after unlock.
 
@@ -75,7 +75,7 @@ PIR_RETRIGGER_BLOCK_S = 10: minimum gap between auth-wait windows.
 
 FIRE_MQRAW_THRESHOLD = 300: MQ135 raw value that triggers the fire alarm.
 
-Rules:
+**<ins>Rules</ins>:**
 
 Auth wait: a PIR rising edge (0→1) or an RFIDUNAUTH event sends AUTHWAIT30.
 
@@ -97,13 +97,13 @@ Timeout event: if the countdown expires, it sends EVT;AUTHTIMEOUT;INTRUSIONALARM
 
 ## Scenarios
 
-1) Authorized entry: motion → 30 s wait → valid card → unlock → auto-lock after 5 s.
+1) **Authorized entry**: motion → 30 s wait → valid card → unlock → auto-lock after 5 s.
 
-2) Intrusion: motion → no valid card, or an unknown card → intrusion alarm, logged to the database.
+2) **Intrusion**: motion → no valid card, or an unknown card → intrusion alarm, logged to the database.
 
-3) Fire or smoke: MQRAW ≥ 300 → fire alarm and fan on, until the value falls below 300.
+3) **Fire or smoke**: MQRAW ≥ 300 → fire alarm and fan on, until the value falls below 300.
 
-4) Manual override: web button → WebSocket → iotcmd → actuator.
+4) **Manual override**: web button → WebSocket → iotcmd → actuator.
 
 ## Images:
 
