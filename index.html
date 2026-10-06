@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SCADA</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    pre { background:#111; color:#ddd; padding:12px; overflow:auto; }
+    .row { display:flex; gap:20px; align-items:flex-start; }
+    .box { flex:1; }
+    button { margin-right: 10px; margin-bottom: 10px; padding: 8px 12px; }
+    .group { margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+  <h2>SCADA</h2>
+  <div id="status">Status: disconnected</div>
+
+  <h3>Override</h3>
+
+  <div class="group">
+    <strong>Ventilation</strong><br>
+    <button onclick="sendCmd('VENTON')">VENT ON</button>
+    <button onclick="sendCmd('VENTOFF')">VENT OFF</button>
+  </div>
+
+  <div class="group">
+    <strong>Lock mechanism</strong><br>
+    <button onclick="sendCmd('UNLOCK')">UNLOCK</button>
+    <button onclick="sendCmd('LOCK')">LOCK</button>
+  </div>
+
+  <h3>Alarm types</h3>
+  <div class="group">
+    <strong>Fire alarm</strong><br>
+    <button onclick="sendCmd('FIREALARMON')">FIRE ON</button>
+    <button onclick="sendCmd('FIREALARMOFF')">FIRE OFF</button>
+  </div>
+
+  <div class="group">
+    <strong>Intrusion alarm</strong><br>
+    <button onclick="sendCmd('INTRUSIONALARMON')">INTRUSION ON</button>
+    <button onclick="sendCmd('INTRUSIONALARMOFF')">INTRUSION OFF</button>
+  </div>
+
+  <h3>Authorization wait</h3>
+  <div class="group">
+    <button onclick="sendCmd('AUTHWAIT30')">START 30s WAIT</button>
+    <button onclick="sendCmd('AUTHOK')">AUTH OK</button>
+    <button onclick="sendCmd('AUTHFAIL')">AUTH FAIL</button>
+  </div>
+
+  <h3>Last command reply</h3>
+  <pre id="cmdlog"></pre>
+
+  <div class="row">
+    <div class="box">
+      <h3>Latest telemetry</h3>
+      <pre id="telemetry"></pre>
+    </div>
+    <div class="box">
+      <h3>Last events</h3>
+      <pre id="events"></pre>
+    </div>
+  </div>
+
+  <script>
+    const RPIIP = "192.168.1.2"; // promijeni po potrebi
+    const ws = new WebSocket(`ws://${RPIIP}:8888/ws`);
+
+    ws.onopen = () => {
+      document.getElementById("status").innerText = "Status: connected";
+    };
+
+    ws.onclose = () => {
+      document.getElementById("status").innerText = "Status: disconnected";
+    };
+
+    ws.onerror = () => {
+      document.getElementById("status").innerText = "Status: error";
+    };
+
+    function sendCmd(cmd) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        document.getElementById("cmdlog").innerText = "WS not connected";
+        return;
+      }
+      ws.send(JSON.stringify({ cmd: cmd }));
+    }
+
+    ws.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.type === "snapshot") {
+        document.getElementById("telemetry").innerText =
+          JSON.stringify(data.telemetry, null, 2);
+        document.getElementById("events").innerText =
+          JSON.stringify(data.events, null, 2);
+      } else {
+        document.getElementById("cmdlog").innerText =
+          JSON.stringify(data, null, 2);
+      }
+    };
+  </script>
+</body>
+</html>

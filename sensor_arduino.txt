@@ -1,0 +1,233 @@
+#include <SPI.h>
+#include <MFRC522.h>
+
+// ---------- RFID ----------
+#define SS_PIN  10
+#define RST_PIN 9
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+// RFID polling + anti-spam
+const unsigned long RFID_POLL_MS = 50;
+unsigned long lastRfidPoll = 0;
+
+String lastRfidSentUid = "";
+unsigned long lastRfidSentAt = 0;
+const unsigned long RFID_DUP_SUPPRESS_MS = 1200;
+
+// ---------- Pins ----------
+const byte PIR_PIN   = 2;
+const byte MQ135_PIN = A0;
+
+// ---------- Access ----------
+String MasterTag = "606B4F55";
+String tagID = "";
+String lastUID = "";
+
+// ---------- Timing ----------
+const unsigned long COUNTDOWN_MS = 30000;
+const unsigned long TELEMETRY_MS = 2000;
+const unsigned long MQ_READ_MS   = 250;
+
+// ---------- PIR cooldown / lockout ----------
+const unsigned long PIR_COOLDOWN_MS = 8000;   // promijeni po želji (npr. 5000-15000)
+unsigned long lastPirEventAt = 0;
+
+// ---------- State machine ----------
+enum State { IDLE, WAIT_FOR_CARD, ALARM };
+State state = IDLE;
+unsigned long stateStart = 0;
+
+// PIR
+int lastPir = LOW;
+
+// MQ135 smoothing
+unsigned long lastMqRead = 0;
+float mqAvg = 0;
+const float MQ_ALPHA = 0.1;
+int mqRaw = 0;
+
+// Telemetry timing
+unsigned long lastTelemetrySend = 0;
+
+// Alarm edge reporting
+bool alarmActive = false;
+bool alarmReported = false;
+
+// ---------- Helpers ----------
+const char* stateName(State s) {
+  switch (s) {
+    case IDLE: return "IDLE";
+    case WAIT_FOR_CARD: return "WAIT";
+    case ALARM: return "ALARM";
+    default: return "UNK";
+  }
+}
+
+void setup() {
+  // UART prema Nova2
+  Serial.begin(57600);
+
+  pinMode(PIR_PIN, INPUT);
+
+  SPI.begin();
+  mfrc522.PCD_Init();
+
+  mqRaw = analogRead(MQ135_PIN);
+  mqAvg = mqRaw;
+
+  sendEvent("BOOT:1");
+}
+
+void loop() {
+  handleMq135();
+  checkPirAndWindow();
+  checkRfid();
+  handleAlarmEdgeEvent();
+  sendTelemetryPeriodic();
+}
+
+// ---------- Serial helpers ----------
+void sendEvent(const char* payload) {
+  Serial.print("E;");
+  Serial.print(payload);
+  Serial.print("\n");
+}
+
+void sendTelemetryPeriodic() {
+  unsigned long now = millis();
+  if (now - lastTelemetrySend < TELEMETRY_MS) return;
+  lastTelemetrySend = now;
+
+  int avgInt = (int)(mqAvg + 0.5);
+
+  Serial.print("T;MQRAW:");
+  Serial.print(mqRaw);
+  Serial.print(";MQAVG:");
+  Serial.print(avgInt);
+  Serial.print(";PIR:");
+  Serial.print(lastPir);
+  Serial.print(";STATE:");
+  Serial.print(stateName(state));
+  Serial.print("\n");
+}
+
+// ---------- MQ135 ----------
+void handleMq135() {
+  unsigned long now = millis();
+  if (now - lastMqRead < MQ_READ_MS) return;
+  lastMqRead = now;
+
+  mqRaw = analogRead(MQ135_PIN);
+  mqAvg = (1.0 - MQ_ALPHA) * mqAvg + MQ_ALPHA * mqRaw;
+}
+
+// ---------- PIR + window ----------
+void checkPirAndWindow() {
+  unsigned long now = millis();
+  int pir = digitalRead(PIR_PIN);
+
+  // Update lastPir ALWAYS (edge detector radi uvijek)
+  // ali PIR event i ulazak u WAIT smijemo samo iz IDLE.
+  if (state == IDLE) {
+    // rising edge + cooldown
+    if (pir == HIGH && lastPir == LOW) {
+      if (now - lastPirEventAt >= PIR_COOLDOWN_MS) {
+        sendEvent("PIR:1");
+        lastPirEventAt = now;
+
+        state = WAIT_FOR_CARD;
+        stateStart = now;
+      }
+    }
+  }
+
+  lastPir = pir;
+
+  // countdown -> alarm on
+  if (state == WAIT_FOR_CARD) {
+    if (now - stateStart >= COUNTDOWN_MS) {
+      state = ALARM;
+      alarmActive = true;
+    }
+  }
+
+  if (state == IDLE) {
+    alarmActive = false;
+  }
+}
+
+// ---------- RFID ----------
+bool readUidToTagID() {
+  if (!mfrc522.PICC_IsNewCardPresent()) return false;
+  if (!mfrc522.PICC_ReadCardSerial())   return false;
+
+  tagID = "";
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    if (mfrc522.uid.uidByte[i] < 0x10) tagID += "0";
+    tagID += String(mfrc522.uid.uidByte[i], HEX);
+  }
+  tagID.toUpperCase();
+
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+  return true;
+}
+
+void checkRfid() {
+  unsigned long now = millis();
+  if (now - lastRfidPoll < RFID_POLL_MS) return;
+  lastRfidPoll = now;
+
+  if (!readUidToTagID()) return;
+
+  // Debug potvrda
+  Serial.print("E;RFID_DEBUG;UID:");
+  Serial.print(tagID);
+  Serial.print("\n");
+
+  if (tagID == lastRfidSentUid && (now - lastRfidSentAt) < RFID_DUP_SUPPRESS_MS) {
+    return;
+  }
+  lastRfidSentUid = tagID;
+  lastRfidSentAt = now;
+
+  lastUID = tagID;
+  bool authorized = (tagID == MasterTag);
+
+  if (authorized) {
+    Serial.print("E;RFID_AUTH;UID:");
+    Serial.print(tagID);
+    Serial.print("\n");
+  } else {
+    Serial.print("E;RFID_UNAUTH;UID:");
+    Serial.print(tagID);
+    Serial.print("\n");
+  }
+
+  // Opcija B: samo requestovi
+  if (state == WAIT_FOR_CARD) {
+    if (authorized) {
+      Serial.print("E;UNLOCK_REQ;UID:");
+      Serial.print(tagID);
+      Serial.print("\n");
+
+      state = IDLE;
+      alarmActive = false;
+    }
+  } else if (state == ALARM) {
+    if (authorized) {
+      Serial.print("E;ALARM_OFF_REQ;UID:");
+      Serial.print(tagID);
+      Serial.print("\n");
+    }
+  }
+}
+
+// ---------- Alarm edge ----------
+void handleAlarmEdgeEvent() {
+  if (alarmActive != alarmReported) {
+    if (alarmActive) sendEvent("ALARM_ON");
+    else sendEvent("ALARM_OFF");
+    alarmReported = alarmActive;
+  }
+}
